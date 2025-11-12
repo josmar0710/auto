@@ -7,13 +7,35 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_stdinc.h>
 #include <SDL3/SDL_video.h>
-#include <array>
 #include <cassert>
 #include <cstddef>
 #include <iostream>
 #include <string>
 #include <webgpu/wgpu.h>
 namespace jmauto {
+WGPUShaderModule CreateShaderModule(const std::string &path) {
+  size_t length;
+  const char *data = (const char *)SDL_LoadFile(path.c_str(), &length);
+  if (!data) {
+    throw SDLException("load file");
+  }
+  Defer free_code([data] {
+    SDL_free((void *)data);
+    std::cout << "free code data\n";
+  });
+  WGPUShaderSourceWGSL source = {};
+  source.code.length = length;
+  source.code.data = data;
+  source.chain.sType = WGPUSType_ShaderSourceWGSL;
+  WGPUShaderModuleDescriptor descriptor = {};
+  descriptor.nextInChain = &source.chain;
+  WGPUShaderModule module =
+      wgpuDeviceCreateShaderModule(state->device, &descriptor);
+  if (!module) {
+    throw WGPUException("create shader module -> " + path);
+  }
+  return module;
+}
 void Init() {
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     throw SDLException("init sdl");
@@ -158,45 +180,15 @@ void Init() {
     throw WGPUException("get queue");
   }
   {
-    size_t length;
-    const char *data = (const char *)SDL_LoadFile("wgsl/render.wgsl", &length);
-    if (!data) {
-      throw SDLException("load file");
-    }
-    // state->releaser.Push([data]() {
-    //   SDL_free((void *)data);
-    //   std::cout << "free code data\n";
-    // });
-    Defer free_code([data] {
-      SDL_free((void *)data);
-      std::cout << "free code data\n";
-    });
-    WGPUShaderSourceWGSL source = {};
-    source.code.length = length;
-    source.code.data = data;
-    source.chain.sType = WGPUSType_ShaderSourceWGSL;
-    WGPUShaderModuleDescriptor descriptor = {};
-    descriptor.nextInChain = &source.chain;
-    state->render_module =
-        wgpuDeviceCreateShaderModule(state->device, &descriptor);
-    if (!state->render_module) {
-      throw WGPUException("create shader module");
-    }
-    state->releaser.Push([] {
-      wgpuShaderModuleRelease(state->render_module);
-      std::cout << "release shader module\n";
-    });
-  }
-  {
     WGPUPipelineLayoutDescriptor descriptor = {};
     descriptor.label = {"render pipeline layout", WGPU_STRLEN};
-    state->pipeline_layout =
+    state->render_layout =
         wgpuDeviceCreatePipelineLayout(state->device, &descriptor);
-    if (!state->pipeline_layout) {
+    if (!state->render_layout) {
       throw WGPUException("create pipeline layout");
     }
     state->releaser.Push([] {
-      wgpuPipelineLayoutRelease(state->pipeline_layout);
+      wgpuPipelineLayoutRelease(state->render_layout);
       std::cout << "release pipeline layout\n";
     });
   }
@@ -209,6 +201,9 @@ void Init() {
     throw WGPUException("get surface capabilities");
   }
   {
+    WGPUShaderModule render_module = CreateShaderModule("wgsl/render.wgsl");
+    Defer release_shader(
+        [render_module] { wgpuShaderModuleRelease(render_module); });
     WGPUColorTargetState color_target = {};
     color_target.format = state->capabilities.formats[0];
     color_target.writeMask = WGPUColorWriteMask_All;
@@ -221,7 +216,7 @@ void Init() {
 
     WGPURenderPipelineDescriptor descriptor = {};
     descriptor.label = {"render pipeline", WGPU_STRLEN};
-    descriptor.layout = state->pipeline_layout;
+    descriptor.layout = state->render_layout;
     descriptor.vertex.module = state->render_module;
     descriptor.vertex.entryPoint = {"vs_main", WGPU_STRLEN};
     descriptor.fragment = &fragment_state;
@@ -284,6 +279,49 @@ void Init() {
       throw WGPUException("create view");
     }
     state->releaser.Push([] { wgpuTextureViewRelease(state->view); });
+  }
+  {
+    WGPUBindGroupLayoutEntry entry = {};
+    entry.binding = 0;
+    entry.visibility = WGPUShaderStage_Compute;
+    entry.sampler;
+
+    WGPUBindGroupLayoutDescriptor descriptor = {};
+    descriptor.entryCount = 1;
+    descriptor.entries;
+    wgpuDeviceCreateBindGroupLayout(state->device, &descriptor);
+  }
+  {
+
+    WGPUPipelineLayoutDescriptor descriptor = {};
+    descriptor.label = {"draw pipeline layout", WGPU_STRLEN};
+    descriptor.bindGroupLayoutCount = 1;
+    descriptor.bindGroupLayouts;
+    state->draw_layout =
+        wgpuDeviceCreatePipelineLayout(state->device, &descriptor);
+    if (!state->draw_layout) {
+      throw WGPUException("create pipeline layout");
+    }
+    state->releaser.Push([] {
+      wgpuPipelineLayoutRelease(state->render_layout);
+      std::cout << "release pipeline layout\n";
+    });
+  }
+  {
+    WGPUShaderModule draw_module = CreateShaderModule("wgsl/draw.wgsl");
+    Defer release_shader(
+        [draw_module] { wgpuShaderModuleRelease(draw_module); });
+
+    WGPUPipelineLayout layout = {};
+
+    WGPUProgrammableStageDescriptor prog_descriptor = {};
+    prog_descriptor.entryPoint = {"draw_main", WGPU_STRLEN};
+    prog_descriptor.module = draw_module;
+
+    WGPUComputePipelineDescriptor descriptor = {};
+    descriptor.label = {"draw pipeline", WGPU_STRLEN};
+    descriptor.compute = prog_descriptor;
+    wgpuDeviceCreateComputePipeline(state->device, &descriptor);
   }
 }
 } // namespace jmauto

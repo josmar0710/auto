@@ -15,12 +15,15 @@ public:
   WGPUDevice device;
   WGPUQueue queue;
   WGPUShaderModule render_module;
-  WGPUPipelineLayout pipeline_layout;
+  WGPUPipelineLayout render_layout;
   WGPUSurfaceCapabilities capabilities;
   WGPURenderPipeline render_pipeline;
   WGPUSurfaceConfiguration config;
   WGPUTexture texture;
   WGPUTextureView view;
+  WGPUPipelineLayout draw_layout;
+  WGPUComputePipeline draw_pipeline;
+  WGPUBindGroup draw_bind_group;
   Releaser releaser;
 };
 extern State *state;
